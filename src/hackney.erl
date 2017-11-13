@@ -94,6 +94,7 @@ cancel_request(Ref) ->
 
 %% @doc set client options.
 %% Options are:
+%% - `compress': request compression and transparently decompress
 %% - `async': to fetch the response asynchronously
 %% - `{async, once}': to receive the response asynchronously one time.
 %% To receive the next message use the function `hackney:stream_next/1'.
@@ -211,6 +212,8 @@ request(Method, URL, Headers, Body) ->
 %%      directly. The response is `{ok, Status, Headers, Body}'</li>
 %%      <li>`max_body': sets maximum allowed size of the body if
 %%      with_body is true</li>
+%%      <li>`compress': request that the server sends the body compressed
+%%      and instructs hackney to transparently decompress it</li>
 %%      <li>`async': receive the response asynchronously
 %%      The function return {ok, StreamRef}.
 %%      When {async, once} is used the response will be received only once. To
@@ -987,6 +990,9 @@ maybe_update_req(State) ->
 
 parse_options([], State) ->
   State;
+parse_options([compress | Rest], State = #client{headers=Headers}) ->
+  Headers2 = hackney_headers:store(<<"accept-encoding">>, <<"gzip, deflate">>, Headers),
+  parse_options(Rest, State#client{headers=Headers2});
 parse_options([async | Rest], State) ->
   parse_options(Rest, State#client{async=true});
 parse_options([{async, Async} | Rest], State) ->

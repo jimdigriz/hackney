@@ -299,6 +299,9 @@ parse_header(Line, St) ->
           <<"transfer-encoding">> ->
             TE = hackney_bstr:to_lower(hackney_bstr:trim(Value)),
             St#hparser{te=TE};
+          <<"content-encoding">> ->
+            CE = hackney_bstr:to_lower(hackney_bstr:trim(Value)),
+            St#hparser{ce=CE};
           <<"connection">> ->
             Connection = hackney_bstr:to_lower(hackney_bstr:trim(Value)),
             St#hparser{connection=Connection};
@@ -331,9 +334,31 @@ parse_trailers(St, Acc) ->
     {more, St2} -> {more, St2}
   end.
 
-parse_body(#hparser{body_state=waiting, method= <<"HEAD">>, buffer=Buffer}) ->
- {done, Buffer};
-parse_body(St=#hparser{body_state=waiting, te=TE, clen=Length, buffer=Buffer}) ->
+parse_body(#hparser{body_state=waiting, method=Method, buffer=Buffer, clen=Length}) when Method == <<"HEAD">>; Length =:= 0 ->
+  {done, Buffer};
+parse_body(St=#hparser{body_state=waiting, ce=CE}) when CE == <<"gzip">>; CE == <<"deflate">> ->
+  MaxWBITS = 15,						% zconf.h
+  WB = MaxWBITS + if CE == <<"gzip">> -> 16; true -> 0 end,	% http://www.zlib.net/manual.html#Advanced
+  Z = zlib:open(),
+  ok = zlib:inflateInit(Z, WB),
+  parse_body2(St#hparser{encoding={zlib,Z}});
+parse_body(St=#hparser{encoding={zlib,Z}}) ->
+  case parse_body2(St) of
+    {ok, Chunk, St2} ->
+      Chunk2 = iolist_to_binary(zlib:inflate(Z, Chunk)),
+      {ok, Chunk2, St2};
+    {done, Rest} ->
+      Rest2 = iolist_to_binary(zlib:inflate(Z, Rest)),
+      ok = zlib:inflateEnd(Z),
+      ok = zlib:close(Z),
+      {done, Rest2};
+    Else ->
+      Else
+  end;
+parse_body(St) ->
+  parse_body2(St).
+
+parse_body2(St=#hparser{body_state=waiting, te=TE, clen=Length, buffer=Buffer}) ->
   case {TE, Length} of
     {<<"chunked">>, _} ->
       parse_body(St#hparser{body_state=
@@ -347,13 +372,12 @@ parse_body(St=#hparser{body_state=waiting, te=TE, clen=Length, buffer=Buffer}) -
         St#hparser{body_state={stream, fun te_identity/2, {0, Length}, fun ce_identity/1}}
        )
   end;
-parse_body(#hparser{body_state=done, buffer=Buffer}) ->
+parse_body2(#hparser{body_state=done, buffer=Buffer}) ->
   {done, Buffer};
-parse_body(St=#hparser{buffer=Buffer, body_state={stream, _, _, _}}) when byte_size(Buffer) > 0 ->
+parse_body2(St=#hparser{buffer=Buffer, body_state={stream, _, _, _}}) when byte_size(Buffer) > 0 ->
   transfer_decode(Buffer, St#hparser{buffer= <<>>});
-parse_body(St) ->
+parse_body2(St) ->
   {more, St, <<>>}.
-
 
 -spec transfer_decode(binary(), #hparser{})
     -> {ok, binary(), #hparser{}} | {done, binary()} | {error, atom()}.
@@ -514,6 +538,8 @@ get_property(method, #hparser{method=Method}) ->
   Method;
 get_property(transfer_encoding, #hparser{te=TE}) ->
   TE;
+get_property(content_encoding, #hparser{ce=CE}) ->
+  CE;
 get_property(content_length, #hparser{clen=CLen}) ->
   CLen;
 get_property(connection, #hparser{connection=Connection}) ->

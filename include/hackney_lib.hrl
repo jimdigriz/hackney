@@ -26,8 +26,10 @@
  partial_headers = []   :: list(),
  clen = undefined        :: integer() | undefined | bad_int,
  te = <<>>              :: binary(),
+ ce = <<>>              :: binary(),
  connection = <<>>      :: binary(),
  ctype = <<>>           :: binary(),
  location = <<>>        :: binary(),
- body_state = waiting   :: atom() | tuple()
+ body_state = waiting   :: atom() | tuple(),
+ encoding               :: {atom(), any()} | undefined
 }).
